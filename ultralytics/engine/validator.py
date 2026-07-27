@@ -162,7 +162,11 @@ class BaseValidator:
             if trainer.args.compile and hasattr(model, "_orig_mod"):
                 model = model._orig_mod  # validate non-compiled original model to avoid issues
             model = model.float()
-            self.loss = torch.zeros_like(trainer.loss_items, device=trainer.device)
+            # Initialize loss based on loss_items type (dict or tensor)
+            if isinstance(trainer.loss_items, dict):
+                self.loss = {k: torch.zeros_like(v, device=trainer.device) for k, v in trainer.loss_items.items()}
+            else:
+                self.loss = torch.zeros_like(trainer.loss_items, device=trainer.device)
             self.args.plots &= trainer.stopper.possible_stop or (trainer.epoch == trainer.epochs - 1)
             model.eval()
         else:
@@ -245,7 +249,12 @@ class BaseValidator:
                 # Loss
                 with dt[2]:
                     if self.training:
-                        self.loss += model.loss(batch, preds)[1]
+                        batch_loss = model.loss(batch, preds)[1]
+                        if isinstance(self.loss, dict):
+                            for k in self.loss:
+                                self.loss[k] += batch_loss[k]
+                        else:
+                            self.loss += batch_loss
 
             # Postprocess
             with dt[3]:
@@ -269,12 +278,22 @@ class BaseValidator:
 
         if self.training:
             # Reduce loss across all GPUs
-            loss = self.loss.clone().detach()
-            if trainer.world_size > 1:
-                dist.reduce(loss, dst=0, op=dist.ReduceOp.AVG)
-            if RANK > 0:
-                return
-            results = {**stats, **trainer.label_loss_items(loss.cpu() / len(self.dataloader), prefix="val")}
+            if isinstance(self.loss, dict):
+                loss = {k: v.clone().detach() for k, v in self.loss.items()}
+                if trainer.world_size > 1:
+                    for k in loss:
+                        dist.reduce(loss[k], dst=0, op=dist.ReduceOp.AVG)
+                if RANK > 0:
+                    return
+                loss = {k: v.cpu() / len(self.dataloader) for k, v in loss.items()}
+            else:
+                loss = self.loss.clone().detach()
+                if trainer.world_size > 1:
+                    dist.reduce(loss, dst=0, op=dist.ReduceOp.AVG)
+                if RANK > 0:
+                    return
+                loss = loss.cpu() / len(self.dataloader)
+            results = {**stats, **trainer.label_loss_items(loss, prefix="val")}
             return {k: round(float(v), 5) for k, v in results.items()}  # return results as 5 decimal place floats
         else:
             if RANK > 0:
