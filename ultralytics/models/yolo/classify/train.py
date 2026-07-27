@@ -193,11 +193,11 @@ class ClassificationTrainer(BaseTrainer):
             self.test_loader, self.save_dir, args=copy(self.args), _callbacks=self.callbacks
         )
 
-    def label_loss_items(self, loss_items: torch.Tensor | None = None, prefix: str = "train"):
+    def label_loss_items(self, loss_items: torch.Tensor | dict[str, float] | None = None, prefix: str = "train"):
         """Return a loss dict with labeled training loss items tensor.
 
         Args:
-            loss_items (torch.Tensor, optional): Loss tensor items.
+            loss_items (torch.Tensor | dict[str, float], optional): Loss tensor items or dict.
             prefix (str, optional): Prefix to prepend to loss names.
 
         Returns:
@@ -206,7 +206,11 @@ class ClassificationTrainer(BaseTrainer):
         keys = [f"{prefix}/{x}" for x in self.loss_names]
         if loss_items is None:
             return keys
-        loss_items = [round(float(loss_items), 5)]
+        if isinstance(loss_items, dict):
+            # Extract values in the order of loss_names
+            loss_items = [round(float(loss_items.get(k, 0.0)), 5) for k in self.loss_names]
+        else:
+            loss_items = [round(float(loss_items), 5)]
         return dict(zip(keys, loss_items))
 
     def plot_training_samples(self, batch: dict[str, torch.Tensor], ni: int):
