@@ -18,6 +18,50 @@ from ultralytics.utils.torch_utils import autocast
 from .metrics import bbox_iou, probiou
 from .tal import bbox2dist, rbox2dist
 
+class FocalLoss(nn.Module):
+    """
+    Focal Loss (RetinaNet)
+    https://arxiv.org/abs/1708.02002
+    """
+
+    def __init__(self,
+                 alpha=0.25,
+                 gamma=2.0,
+                 reduction="mean"):
+        super().__init__()
+
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+
+        # BCE Loss
+        ce_loss = F.binary_cross_entropy_with_logits(
+            inputs,
+            targets,
+            reduction="none"
+        )
+
+        # sigmoid
+        p = torch.sigmoid(inputs)
+
+        # p_t
+        p_t = p * targets + (1 - p) * (1 - targets)
+
+        loss = ce_loss * ((1 - p_t) ** self.gamma)
+
+        if self.alpha >= 0:
+            alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+            loss = alpha_t * loss
+
+        if self.reduction == "mean":
+            return loss.mean()
+
+        elif self.reduction == "sum":
+            return loss.sum()
+
+        return loss
 
 class VarifocalLoss(nn.Module):
     """Varifocal loss by Zhang et al.
@@ -345,7 +389,7 @@ class v8DetectionLoss:
         h = model.args  # hyperparameters
 
         m = model.model[-1]  # Detect() module
-        self.bce = nn.BCEWithLogitsLoss(reduction="none")
+        self.bce = FocalLoss(alpha=0.25, gamma=2.0, reduction="none")
         self.hyp = h
         self.stride = m.stride  # model strides
         self.nc = m.nc  # number of classes
