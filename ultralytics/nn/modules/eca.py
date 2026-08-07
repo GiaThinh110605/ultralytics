@@ -1,6 +1,6 @@
+import math
 import torch
 from torch import nn
-from torch.nn.parameter import Parameter
 
 class ECA(nn.Module):
     """Constructs a ECA module.
@@ -9,9 +9,16 @@ class ECA(nn.Module):
         channel: Number of channels of the input feature map
         k_size: Adaptive selection of kernel size
     """
-    def __init__(self, channel, k_size=3):
+    def __init__(self, channel, k_size=None, gamma=2, b=1):
         super(ECA, self).__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        
+        # Adaptive kernel size calculation
+        if k_size is None:
+            t = int(abs((math.log2(channel) + b) / gamma))
+            k_size = t if t % 2 else t + 1
+            k_size = max(k_size, 3)
+        
         self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False) 
         self.sigmoid = nn.Sigmoid()
 
