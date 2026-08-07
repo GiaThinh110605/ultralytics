@@ -83,7 +83,7 @@ class FocalLoss(nn.Module):
             self.alpha = self.alpha.to(device=pred.device, dtype=pred.dtype)
             alpha_factor = label * self.alpha + (1 - label) * (1 - self.alpha)
             loss *= alpha_factor
-        return loss.mean(1).sum()
+        return loss
 
 
 class DFLoss(nn.Module):
