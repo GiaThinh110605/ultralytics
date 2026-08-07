@@ -43,11 +43,7 @@ class VarifocalLoss(nn.Module):
         """Compute varifocal loss between predictions and ground truth."""
         weight = self.alpha * pred_score.sigmoid().pow(self.gamma) * (1 - label) + gt_score * label
         with autocast(enabled=False):
-            loss = (
-                (F.binary_cross_entropy_with_logits(pred_score.float(), gt_score.float(), reduction="none") * weight)
-                .mean(1)
-                .sum()
-            )
+            loss = F.binary_cross_entropy_with_logits(pred_score.float(), gt_score.float(), reduction="none") * weight
         return loss
 
 
@@ -345,7 +341,7 @@ class v8DetectionLoss:
         h = model.args  # hyperparameters
 
         m = model.model[-1]  # Detect() module
-        self.bce = FocalLoss(alpha=0.25, gamma=2.0)
+        self.bce = VarifocalLoss(gamma=2.0, alpha=0.75)
         self.hyp = h
         self.stride = m.stride  # model strides
         self.nc = m.nc  # number of classes
@@ -435,10 +431,11 @@ class v8DetectionLoss:
         target_scores_sum = max(target_scores.sum(), 1)
 
         # Cls loss with optional class weighting
-        bce_loss = self.bce(pred_scores, target_scores.to(dtype))  # (bs, num_anchors, nc)
+        label = (target_scores > 0).float()
+        bce_loss = self.bce(pred_scores, target_scores.to(dtype), label)  # (bs, num_anchors, nc)
         if self.class_weights is not None:
             bce_loss *= self.class_weights
-        loss[1] = bce_loss.sum() / target_scores_sum  # BCE
+        loss[1] = bce_loss.sum() / target_scores_sum  # Varifocal
 
         # Bbox loss
         if fg_mask.sum():
