@@ -198,6 +198,6 @@ __all__ = (
     "HybridHead",
     "AnchorFreeHead",
     "AHFIN",
-    "ECA",s
+    "ECA",
     "MECS"
 )
