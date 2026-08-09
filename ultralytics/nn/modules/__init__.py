@@ -22,6 +22,7 @@ from .hybridhead import HybridHead
 from .MECS import MECS
 from .AHFIN import AHFIN
 from .eca import ECA
+from .coordatt import CoordAtt
 from .block import (
     C1,
     C2,
@@ -199,5 +200,6 @@ __all__ = (
     "AnchorFreeHead",
     "AHFIN",
     "ECA",
-    "MECS"
+    "MECS",
+    "CoordAtt"
 )

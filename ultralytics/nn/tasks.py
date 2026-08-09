@@ -15,6 +15,7 @@ from ultralytics.nn.modules import (
     ECA,
     MECS,
     AHFIN,
+    CoordAtt,
     HybridHead,
     AnchorFreeHead,
     MultiScaleGhost,
@@ -1932,6 +1933,7 @@ def parse_model(d, ch, verbose=True):
             ECA,
             MECS,
             AHFIN,
+            CoordAtt,
             MultiScaleGhost,
             Classify,
             Conv,
@@ -2016,7 +2018,23 @@ def parse_model(d, ch, verbose=True):
                 args[1] = make_divisible(min(args[1], max_channels // 2) * width, 8)
                 args[2] = int(max(round(min(args[2], max_channels // 2 // 32)) * width, 1) if args[2] > 1 else args[2])
 
-            args = [c1, c2, *args[1:]]
+            # Special handling for attention modules that don't change channels
+            if m in {ECA, MECS, CoordAtt}:
+                c2 = c1  # output channels = input channels
+                # For attention modules, skip the standard args reconstruction
+                # CoordAtt: [inp, oup, reduction] - oup = inp
+                # ECA: [channel, k_size, gamma, b] - channel = inp
+                # MECS: similar to ECA
+                if m is CoordAtt:
+                    # CoordAtt signature: __init__(self, inp, oup, reduction=32)
+                    # YAML args: [reduction]
+                    reduction = args[0] if len(args) > 0 else 32
+                    args = [c1, c1, reduction]  # inp, oup (=inp), reduction
+                else:
+                    # ECA/MECS: keep original args handling
+                    args = [c1, *args]
+            else:
+                args = [c1, c2, *args[1:]]
             if m in repeat_modules:
                 args.insert(2, n)  # number of repeats
                 n = 1
