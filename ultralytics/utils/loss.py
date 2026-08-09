@@ -125,7 +125,7 @@ class BboxLoss(nn.Module):
         # WIoU v3 parameters for dynamic focusing
         if self.iou_loss == "WIoU_v3":
             self.register_buffer("iou_mean", torch.tensor(1.0))
-            self.momentum = 0.01  # EMA momentum
+            self.momentum = 0.1  # EMA momentum
             self.alpha = 1.9  # Focusing parameter (best in paper)
             self.delta = 3.0  # Focusing parameter (best in paper)
 
@@ -147,37 +147,33 @@ class BboxLoss(nn.Module):
         # Select IoU loss type
         if self.iou_loss == "WIoU_v3":
             # WIoU v3: Get (iou, rho2, c2) tuple
-            iou_result = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, WIoU_v3=True)
-            if isinstance(iou_result, tuple):
-                iou, rho2, c2 = iou_result
-            else:
-                # Fallback if not tuple (should not happen)
-                iou = iou_result
-                rho2 = c2 = None
-            
+            iou, rho2, c2 = bbox_iou(
+                pred_bboxes[fg_mask],
+                target_bboxes[fg_mask],
+                xywh=False,
+                WIoU_v3=True,
+            )
+
             # IoU loss
             iou_loss = 1.0 - iou
-            
+
             # WIoU v1 distance attention: R = exp(rho2 / c2.detach())
             # Important: detach c2 from computational graph (per official implementation)
-            if rho2 is not None and c2 is not None:
-                R = torch.exp(rho2 / c2.detach())
-                wiou_v1 = R * iou_loss
-            else:
-                wiou_v1 = iou_loss
-            
-            # Update EMA of iou_mean during training
+            R = torch.exp(rho2 / c2.detach())
+            wiou_v1 = R * iou_loss
+
+            # Update running mean (EMA)
             if self.training:
-                self.iou_mean.mul_(1 - self.momentum)
-                self.iou_mean.add_(self.momentum * iou_loss.detach().mean())
-            
+                with torch.no_grad():
+                    self.iou_mean.mul_(1.0 - self.momentum)
+                    self.iou_mean.add_(self.momentum * iou_loss.detach().mean())
+
             # WIoU v3 dynamic non-monotonic focusing
             # beta = L_IoU / EMA(L_IoU) (per official implementation)
             with torch.no_grad():
                 beta = iou_loss.detach() / (self.iou_mean + 1e-6)
-                divisor = self.delta * torch.pow(self.alpha, beta - self.delta)
-                r = beta / divisor
-            
+                r = beta / (self.delta * torch.pow(self.alpha, beta - self.delta))
+
             wiou_v3 = r * wiou_v1
             loss_iou = (wiou_v3 * weight).sum() / target_scores_sum
         elif self.iou_loss == "CIoU":
