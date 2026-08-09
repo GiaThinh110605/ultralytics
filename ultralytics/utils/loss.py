@@ -126,8 +126,8 @@ class BboxLoss(nn.Module):
         if self.iou_loss == "WIoU_v3":
             self.register_buffer("iou_mean", torch.tensor(1.0))
             self.momentum = 0.01  # EMA momentum
-            self.alpha = 1.7  # Focusing parameter
-            self.delta = 2.7  # Focusing parameter
+            self.alpha = 1.9  # Focusing parameter (best in paper)
+            self.delta = 3.0  # Focusing parameter (best in paper)
 
     def forward(
         self,
@@ -158,12 +158,13 @@ class BboxLoss(nn.Module):
             # IoU loss
             iou_loss = 1.0 - iou
             
-            # WIoU v1 distance attention: R = exp(rho2 / c2)
+            # WIoU v1 distance attention: R = exp(rho2 / c2.detach())
+            # Important: detach c2 from computational graph (per official implementation)
             if rho2 is not None and c2 is not None:
-                R = torch.exp(rho2 / c2)
-                wiou_loss = R * iou_loss
+                R = torch.exp(rho2 / c2.detach())
+                wiou_v1 = R * iou_loss
             else:
-                wiou_loss = iou_loss
+                wiou_v1 = iou_loss
             
             # Update EMA of iou_mean during training
             if self.training:
@@ -171,12 +172,14 @@ class BboxLoss(nn.Module):
                 self.iou_mean.add_(self.momentum * iou_loss.detach().mean())
             
             # WIoU v3 dynamic non-monotonic focusing
+            # beta = L_IoU / EMA(L_IoU) (per official implementation)
             with torch.no_grad():
                 beta = iou_loss.detach() / (self.iou_mean + 1e-6)
                 divisor = self.delta * torch.pow(self.alpha, beta - self.delta)
                 r = beta / divisor
             
-            loss_iou = (r * wiou_loss * weight).sum() / target_scores_sum
+            wiou_v3 = r * wiou_v1
+            loss_iou = (wiou_v3 * weight).sum() / target_scores_sum
         elif self.iou_loss == "CIoU":
             iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
             loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
