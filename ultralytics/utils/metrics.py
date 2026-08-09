@@ -109,6 +109,7 @@ def bbox_iou(
     GIoU: bool = False,
     DIoU: bool = False,
     CIoU: bool = False,
+    WIoU_v3: bool = False,
     eps: float = 1e-7,
 ) -> torch.Tensor:
     """Calculate the Intersection over Union (IoU) between bounding boxes.
@@ -125,10 +126,14 @@ def bbox_iou(
         GIoU (bool, optional): If True, calculate Generalized IoU.
         DIoU (bool, optional): If True, calculate Distance IoU.
         CIoU (bool, optional): If True, calculate Complete IoU.
+        WIoU_v3 (bool, optional): If True, calculate Wise-IoU v3 with dynamic focusing mechanism.
         eps (float, optional): A small value to avoid division by zero.
 
     Returns:
-        (torch.Tensor): IoU, GIoU, DIoU, or CIoU values depending on the specified flags.
+        (torch.Tensor): IoU, GIoU, DIoU, CIoU, or WIoU v3 values depending on the specified flags.
+
+    References:
+        WIoU v3: https://arxiv.org/abs/2301.10051
     """
     # Get the coordinates of bounding boxes
     if xywh:  # transform from xywh to xyxy
@@ -152,6 +157,19 @@ def bbox_iou(
 
     # IoU
     iou = inter / union
+    if WIoU_v3:
+        # Wise-IoU v3: Return distance penalty for WIoU loss calculation
+        # https://arxiv.org/abs/2301.10051
+        # Reference: https://github.com/Instinct323/Wise-IoU
+        cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex width
+        ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
+        c2 = cw.pow(2) + ch.pow(2) + eps  # convex diagonal squared
+        rho2 = (
+            (b2_x1 + b2_x2 - b1_x1 - b1_x2).pow(2) + (b2_y1 + b2_y2 - b1_y1 - b1_y2).pow(2)
+        ) / 4  # center dist**2
+        
+        # Return (iou, rho2, c2) for WIoU loss calculation
+        return iou, rho2, c2
     if CIoU or DIoU or GIoU:
         cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
         ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height

@@ -111,10 +111,23 @@ class DFLoss(nn.Module):
 class BboxLoss(nn.Module):
     """Criterion class for computing training losses for bounding boxes."""
 
-    def __init__(self, reg_max: int = 16):
-        """Initialize the BboxLoss module with regularization maximum and DFL settings."""
+    def __init__(self, reg_max: int = 16, iou_loss: str = "CIoU"):
+        """Initialize the BboxLoss module with regularization maximum and DFL settings.
+
+        Args:
+            reg_max (int): Maximum regularization value for DFL.
+            iou_loss (str): Type of IoU loss to use. Options: 'CIoU', 'DIoU', 'GIoU', 'WIoU_v3'.
+        """
         super().__init__()
         self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
+        self.iou_loss = iou_loss
+        
+        # WIoU v3 parameters for dynamic focusing
+        if self.iou_loss == "WIoU_v3":
+            self.register_buffer("iou_mean", torch.tensor(1.0))
+            self.momentum = 0.01  # EMA momentum
+            self.alpha = 1.7  # Focusing parameter
+            self.delta = 2.7  # Focusing parameter
 
     def forward(
         self,
@@ -130,8 +143,52 @@ class BboxLoss(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute IoU and DFL losses for bounding boxes."""
         weight = target_scores[fg_mask].sum(-1, keepdim=True)
-        iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
-        loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+        
+        # Select IoU loss type
+        if self.iou_loss == "WIoU_v3":
+            # WIoU v3: Get (iou, rho2, c2) tuple
+            iou_result = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, WIoU_v3=True)
+            if isinstance(iou_result, tuple):
+                iou, rho2, c2 = iou_result
+            else:
+                # Fallback if not tuple (should not happen)
+                iou = iou_result
+                rho2 = c2 = None
+            
+            # IoU loss
+            iou_loss = 1.0 - iou
+            
+            # WIoU v1 distance attention: R = exp(rho2 / c2)
+            if rho2 is not None and c2 is not None:
+                R = torch.exp(rho2 / c2)
+                wiou_loss = R * iou_loss
+            else:
+                wiou_loss = iou_loss
+            
+            # Update EMA of iou_mean during training
+            if self.training:
+                self.iou_mean.mul_(1 - self.momentum)
+                self.iou_mean.add_(self.momentum * iou_loss.detach().mean())
+            
+            # WIoU v3 dynamic non-monotonic focusing
+            with torch.no_grad():
+                beta = iou_loss.detach() / (self.iou_mean + 1e-6)
+                divisor = self.delta * torch.pow(self.alpha, beta - self.delta)
+                r = beta / divisor
+            
+            loss_iou = (r * wiou_loss * weight).sum() / target_scores_sum
+        elif self.iou_loss == "CIoU":
+            iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+            loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+        elif self.iou_loss == "DIoU":
+            iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, DIoU=True)
+            loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+        elif self.iou_loss == "GIoU":
+            iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, GIoU=True)
+            loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+        else:
+            iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False)
+            loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
 
         # DFL loss
         if self.dfl_loss:
@@ -369,7 +426,9 @@ class v8DetectionLoss:
             stride=self.stride.tolist(),
             topk2=tal_topk2,
         )
-        self.bbox_loss = BboxLoss(m.reg_max).to(device)
+        # Get iou_loss type from hyperparameters, default to CIoU
+        iou_loss = getattr(h, 'iou_loss', 'CIoU')
+        self.bbox_loss = BboxLoss(m.reg_max, iou_loss=iou_loss).to(device)
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
 
     def preprocess(self, targets: torch.Tensor, batch_size: int, scale_tensor: torch.Tensor) -> torch.Tensor:
